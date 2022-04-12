@@ -4,17 +4,15 @@ from flask import Flask, request
 import requests
 import threading
 from pyngrok import ngrok
-
-import sys
-
 # set enums
-ECB =	1
-PAD_PKCS5 = 1
 
+
+ECB =	1
+PKCS5 = 1
 
 class desClass(object):
-	def __init__(self, mode=ECB, padmode=PAD_PKCS5):
-		self.block_size = 8
+	def __init__(self, mode=ECB, padmode=PKCS5):
+		self.blockSize = 8
 		self.cipherMode = mode
 		self.initializationVector = None
 		self.paddingMode = padmode
@@ -27,8 +25,7 @@ class desClass(object):
 		self.key = key
 
 	def addDataPadding(self, data):
-		#PAD_PKCS5
-		pad_len = 8 - (len(data) % self.block_size)
+		pad_len = 8 - (len(data) % self.blockSize) # See readme for more details about how this is done
 		data += bytes([pad_len] * pad_len)
 
 		return data
@@ -36,8 +33,7 @@ class desClass(object):
 	def removePadding(self, data):
 		if not data:
 			return data
-		# PAD_PKCS5
-		pad_len = data[-1]
+		pad_len = data[-1] # obtain how many bytes to remove from the nature of padding, see readme for more details
 		data = data[:-pad_len]
 
 		return data
@@ -49,7 +45,8 @@ class desClass(object):
 
 class des(desClass):
 	# initial permutation IP
-	ip = [57, 49, 41, 33, 25, 17, 9,  1,
+	initialPermutation = [
+     	57, 49, 41, 33, 25, 17, 9,  1,
 		59, 51, 43, 35, 27, 19, 11, 3,
 		61, 53, 45, 37, 29, 21, 13, 5,
 		63, 55, 47, 39, 31, 23, 15, 7,
@@ -59,7 +56,7 @@ class des(desClass):
 		62, 54, 46, 38, 30, 22, 14, 6
 	]
  
-	# Permutation and translation tables for DES
+	# Used for getting keys of DES by permuting, 64 bit input to 56 bit output
 	pc1 = [56, 48, 40, 32, 24, 16,  8,
 		  0, 57, 49, 41, 33, 25, 17,
 		  9,  1, 58, 50, 42, 34, 26,
@@ -75,7 +72,7 @@ class des(desClass):
 		1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1
 	]
 
-	# permuted choice key (table 2)
+	# also used for key generation process
 	pc2 = [
 		13, 16, 10, 23,  0,  4,
 		 2, 27, 14,  5, 20,  9,
@@ -89,8 +86,8 @@ class des(desClass):
 
 	
 
-	# Expansion table for turning 32 bit blocks into 48 bits
-	expansion = [
+	# use for changing 32 bit blocks to 48 bits as part of DES process
+	expansionBox = [
 		31,  0,  1,  2,  3,  4,
 		 3,  4,  5,  6,  7,  8,
 		 7,  8,  9, 10, 11, 12,
@@ -101,8 +98,8 @@ class des(desClass):
 		27, 28, 29, 30, 31,  0
 	]
 
-	# The (in)famous S-boxes
-	sBox = [
+	# S-boxes
+	substitutionBox = [
 		# S1
 		[14, 4, 13, 1, 2, 15, 11, 8, 3, 10, 6, 12, 5, 9, 0, 7,
 		 0, 15, 7, 4, 14, 2, 13, 1, 10, 6, 12, 11, 9, 5, 3, 8,
@@ -153,7 +150,7 @@ class des(desClass):
 	]
 
 
-	# 32-bit permutation function P used on the output of the S-boxes
+	# permutation box for output of the S-boxes
 	pBox = [
 		15, 6, 19, 20, 28, 11,
 		27, 16, 0, 14, 22, 25,
@@ -163,7 +160,7 @@ class des(desClass):
 		3, 24
 	]
 
-	# final permutation IP^-1
+	# final permutation (inverse of initial permutation)
 	finalPermu = [
 		39,  7, 47, 15, 55, 23, 63, 31,
 		38,  6, 46, 14, 54, 22, 62, 30,
@@ -176,25 +173,25 @@ class des(desClass):
 	]
 
 	# crypt literals
-	ENCRYPT =	0x00
-	DECRYPT =	0x01
+	ENCRYPT =	0
+	DECRYPT =	1
 
 	# Initialisation
-	def __init__(self, key, mode=ECB, padmode=PAD_PKCS5):
+	def __init__(self, key, mode=ECB, padmode=PKCS5):
 		if len(key) != 8:
 			raise ValueError("Invalid DES key size. need 8 bytes long.")
 		desClass.__init__(self, mode, padmode)
 
 		self.L = []
 		self.R = []
-		self.Kn = [ [0] * 48 ] * 16	# 16 48-bit keys (K1 - K16)
+		self.subKeys = [ [0] * 48 ] * 16	# 16 48-bit keys (K1 - K16)
 		self.final = []
-		self.keySize = 8
+		self.keySize = 8 # bytes
 		self.setKey(key)
 
 	def setKey(self, key):
 		desClass.setKey(self, key)
-		self.generateSubKeys()
+		self.generateSubKeys() # generate keys right now to be used in future encryption and decryption process
 
 	def stringToBits(self, data):
 		length = len(data) * 8
@@ -213,7 +210,7 @@ class des(desClass):
 		return answer
 
 	def convertToString(self, data):
-		"""Convert bits into str"""
+		#Convert bits into str
 		result = []
 		pos = 0
 		c = 0
@@ -226,7 +223,7 @@ class des(desClass):
 		return bytes(result)
 
 	def permuteBlock(self, table, block):
-		"""Permutate this block with the specified table"""
+		# do Permutation operation on this block with the specified table
 		return list(map(lambda x: block[x], table))
 	
 	# generate subkeys for each step of DES
@@ -238,7 +235,7 @@ class des(desClass):
 		self.R = KEY[28:]
 		while i < 16:
 			j = 0
-			# Perform circular left shifts
+			# circular shifts to the left
 			while j < des.left_rotat[i]:
 				self.L.append(self.L[0])
 				del self.L[0]
@@ -249,105 +246,117 @@ class des(desClass):
 				j += 1
 
 			# Create one of the 16 subkeys through pc2 permutation
-			self.Kn[i] = self.permuteBlock(des.pc2, self.L + self.R)
+			self.subKeys[i] = self.permuteBlock(des.pc2, self.L + self.R)
+			# store the key in Kn as done above    
 			i += 1
+	
+	# Data to be encrypted/decrypted
+	def runCryptionAlgorithm(self, data, encryptOrDecrypt):
+		# can be used for both encryption and decryption with minor modifications
+		# this effectively emulates ""ECB"" mode as it passes chunk by chunk
+		if not data:
+			return ''
+		# crypt chunk by chunk
+		i = 0
+		result = []
+		while i < len(data):
+			eightByteChunk = self.stringToBits(data[i:i+8])
+			processed_block = self.desCryption(eightByteChunk, encryptOrDecrypt) # the actual steps happen here
+			result.append(self.convertToString(processed_block)) # add to result
+			i += 8 # increment by a block size
+		return bytes.fromhex('').join(result)
 
 	# the actual encryption algo
-	def __des_crypt(self, block, crypt_type):
-		block = self.permuteBlock(des.ip, block)
-		self.L = block[:32]
-		self.R = block[32:]
+	def desCryption(self, block, encryptOrDecrypt):
+		block = self.permuteBlock(des.initialPermutation, block) # put our block through the initial permutation
+		self.L = block[:32] # take first 32 bits and make it left
+		self.R = block[32:] # next 32 bits and make it right
 
 		# Encryption starts from Kn[1] through to Kn[16]
-		if crypt_type == des.ENCRYPT:
+		if encryptOrDecrypt == des.ENCRYPT:
+			print("ENCRYPTING")
 			iter = 0
-			iterAdjust = 1
+			iterAdjust = 1 #incrementing iterator
 		# Decryption starts from Kn[16] down to Kn[1]
 		else:
+			print("DECRYPTING")
 			iter = 15
-			iterAdjust = -1
-
+			iterAdjust = -1 #decrementing fashion iterator
+		# Just changing these above two parameters is enough as DES is a Feistal cipher, i.e. its self invertible by design
+		print("="*32)
 		i = 0
-		while i < 16:
-			# Make a copy of R[i-1], this will later become L[i]
-			tempR = self.R[:]
+		while i < 16: # run for sixteen steps regardless of encryption or decryption
+			# duplicate R from last step, this will become current L value
+			temporaryRVal = self.R[:]
 
-			# Permutate R[i - 1] to start creating R[i]
-			self.R = self.permuteBlock(des.expansion, self.R)
+			# Permutate R[i - 1] to start the process of obtaining R[i]
+			# get 48 bits from 32 bit key
+			self.R = self.permuteBlock(des.expansionBox, self.R)
 
-			# Exclusive or R[i - 1] with K[i], create B[1] to B[8] whilst here
-			self.R = list(map(lambda x, y: x ^ y, self.R, self.Kn[iter]))
-			B = [self.R[:6], self.R[6:12], self.R[12:18], self.R[18:24], self.R[24:30], self.R[30:36], self.R[36:42], self.R[42:]]
+			# XOR R[i - 1] with current key
+			# key will be used according to iter val, so clearly it will be inverse orders while decrypting
+			self.R = list(map(lambda x, y: x ^ y, self.subKeys[iter],self.R ))
+			#  to be used in substitution box operations
+			SixBitChunks = [self.R[:6], self.R[6:12], self.R[12:18], self.R[18:24], self.R[24:30], self.R[30:36], self.R[36:42], self.R[42:]]
 
-			# Permutate B[1] to B[8] using the S-Boxes
+			# get 4 bit chunk against each six bit chunk for 8 chunks (basically get back 32 bits)
 			j = 0
 			Bn = [0] * 32
 			pos = 0
 			while j < 8:
 				# find offsets
-				m = (B[j][0] << 1) + B[j][5]
-				n = (B[j][1] << 3) + (B[j][2] << 2) + (B[j][3] << 1) + B[j][4]
+				RowNumber = (SixBitChunks[j][0] << 1) + SixBitChunks[j][5] # take extreme two ends to get row number
+    
+    			# take middle 4 bits for col number
+				ColNumber = (SixBitChunks[j][1] << 3) + (SixBitChunks[j][2] << 2) + (SixBitChunks[j][3] << 1) + SixBitChunks[j][4] 
 
 				# Find the permutation value
-				v = des.sBox[j][(m << 4) + n]
+				v = des.substitutionBox[j][(RowNumber << 4) + ColNumber] # get relevant 4 bit entry for given row number and col number
 
-				# Turn value into bits, add it to result: Bn
+				# each step of j will populate 4 bits in final 32 bit value
 				Bn[pos] = (v & 8) >> 3
 				Bn[pos + 1] = (v & 4) >> 2
 				Bn[pos + 2] = (v & 2) >> 1
 				Bn[pos + 3] = v & 1
 
-				pos += 4
-				j += 1
+				pos += 4 # step by 4
+				j += 1 # step by 1
 
-			# Permutate the concatenation of B[1] to B[8] (Bn)
+			# permute R one more time
 			self.R = self.permuteBlock(des.pBox, Bn)
 
-			# Xor with L[i - 1]
+			# Xor with previous step L value
 			self.R = list(map(lambda x, y: x ^ y, self.R, self.L))
 
-			# L[i] becomes R[i - 1]
-			self.L = tempR
+			# use old R value to populate L
+			self.L = temporaryRVal
 
 			i += 1
 			iter += iterAdjust
+			print("After step",i)
+			print("L",self.L)
+			print("R",self.R)
 		
 		# Final permutation of R[16]L[16]
 		self.final = self.permuteBlock(des.finalPermu, self.R + self.L)
+		print("final answer")
+		print(self.final)
 		return self.final
 
 
-	# Data to be encrypted/decrypted
-	def crypt(self, data, crypt_type):
-		"""Crypt the data in blocks, running it through des_crypt()"""
-		if not data:
-			return ''
-		# Split the data into blocks, crypting each one seperately
-		i = 0
-		result = []
-		while i < len(data):
-			block = self.stringToBits(data[i:i+8])
-			processed_block = self.__des_crypt(block, crypt_type)
-			result.append(self.convertToString(processed_block))
-			i += 8
-		return bytes.fromhex('').join(result)
 
 	def encrypt(self, data):
 		data = self.formatForProcessing(data)
-		if pad is not None:
-			pad = self.formatForProcessing(pad)
 		data = self.addDataPadding(data)
-		return self.crypt(data, des.ENCRYPT)
+		return self.runCryptionAlgorithm(data, des.ENCRYPT)
 
 	def decrypt(self, data):
 		data = self.formatForProcessing(data)
-		if pad is not None:
-			pad = self.formatForProcessing(pad)
-		data = self.crypt(data, des.DECRYPT)
-		return self.removePadding(data, pad)
+		data = self.runCryptionAlgorithm(data, des.DECRYPT)
+		return self.removePadding(data)
 
 class triple_des(desClass):
-	def __init__(self, key, mode=ECB, padmode=PAD_PKCS5):
+	def __init__(self, key, mode=ECB, padmode=PKCS5):
 		desClass.__init__(self, mode, padmode)
 		self.setKey(key)
 
@@ -355,42 +364,43 @@ class triple_des(desClass):
 		self.key_size = 16
 		if len(key) != self.key_size:
 			raise ValueError("Invalid 3DES key. Must be 16 bytes long")
-
+		
+  		# set the different keys to be used at each step
 		self.KEY1 = des(key[:8], self.cipherMode, self.paddingMode)
 		self.KEY2 = des(key[8:16], self.cipherMode, self.paddingMode)
-		self.KEY3 = self.KEY1
+		self.KEY3 = self.KEY1 # use same key as first step for 16 byte key
 		desClass.setKey(self, key)
 
 	def encrypt(self, data):
 		ENCRYPT = des.ENCRYPT
 		DECRYPT = des.DECRYPT
 		data = self.formatForProcessing(data)
-		data = self.addDataPadding(data)
-		data = self.KEY1.crypt(data, ENCRYPT)
-		data = self.KEY2.crypt(data, DECRYPT)
-		return self.KEY3.crypt(data, ENCRYPT)
+		data = self.addDataPadding(data) # add padding before encrypting
+		data = self.KEY1.runCryptionAlgorithm(data, ENCRYPT)
+		data = self.KEY2.runCryptionAlgorithm(data, DECRYPT)
+		return self.KEY3.runCryptionAlgorithm(data, ENCRYPT)
 
 	def decrypt(self, data):
 		ENCRYPT = des.ENCRYPT
 		DECRYPT = des.DECRYPT
 		data = self.formatForProcessing(data)
-		data = self.KEY3.crypt(data, DECRYPT)
-		data = self.KEY2.crypt(data, ENCRYPT)
-		data = self.KEY1.crypt(data, DECRYPT)
-		return self.removePadding(data)
+		data = self.KEY3.runCryptionAlgorithm(data, DECRYPT)
+		data = self.KEY2.runCryptionAlgorithm(data, ENCRYPT)
+		data = self.KEY1.runCryptionAlgorithm(data, DECRYPT)
+		return self.removePadding(data) # remove padding before encrypting
 	
 class TripleDESFlaskWrapper:
 	def __init__(self,key="ABCDEFGHIJKLMNOP"):
-		self.tripleDESObject = triple_des(key,padmode=PAD_PKCS5)
+		self.tripleDESObject = triple_des(key,padmode=PKCS5)
 	def encrypt(self,data:str):
-		return self.tripleDESObject.encrypt(data.encode("utf-8"))
+		return self.tripleDESObject.encrypt(data.encode("utf-8")) # takes unicode string and encodes it into a processable format
 	def getEncodedMessage(self,data):
 		print("received encrypt request for the string",data)
 		res = self.encrypt(data)
 		print("result after encryption was",res)
 		return list(res)
 	def decrypt(self,encrypted:bytes):
-		return self.tripleDESObject.decrypt(encrypted).decode("utf-8")
+		return self.tripleDESObject.decrypt(encrypted).decode("utf-8") #reobtains unicode string after processing
 
 obj = TripleDESFlaskWrapper()
 x=obj.encrypt("abcモーニング asasfsf")
